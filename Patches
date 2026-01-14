@@ -1,0 +1,37 @@
+Watchdog: robust TOOL pathing (works when run from anywhere)
+Copy code
+Diff
+--- a/pmos-watchdog.sh
++++ b/pmos-watchdog.sh
+@@ -1,6 +1,18 @@
+ #!/usr/bin/env bash
+ set -u
+
+-TOOL="${TOOL:-./pmos-port-assist.py}"
++SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
++TOOL="${TOOL:-$SCRIPT_DIR/pmos-port-assist.py}"
++
++if [[ ! -f "$TOOL" ]]; then
++  echo "❌ TOOL not found: $TOOL"
++  echo "Tip: set TOOL=/path/to/pmos-port-assist.py"
++  exit 1
++fi
++if [[ ! -r "$TOOL" ]]; then
++  echo "❌ TOOL not readable: $TOOL"
++  exit 1
++fi
+DTC dependency: document it + optional early check (non-fatal) Add this near your env var section or before DTS lint is used:
+Copy code
+Diff
+--- a/pmos-watchdog.sh
++++ b/pmos-watchdog.sh
+@@ -1,6 +1,14 @@
+ #!/usr/bin/env bash
+ set -u
+
++# Optional dependency note (dtc used only if you enable DTS lint features)
++if ! command -v dtc >/dev/null 2>&1; then
++  # Non-fatal: analyzer already prints a warning if dtc is missing.
++  echo "ℹ️  Note: 'dtc' (device-tree-compiler) not found. DTS lint will be unavailable unless installed."
++  echo "    Install: sudo apt install device-tree-compiler  (or your distro equivalent)"
++fi

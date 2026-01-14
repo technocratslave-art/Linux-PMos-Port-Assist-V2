@@ -1,0 +1,39 @@
+Sanity run:
+Copy code
+Bash
+python3 pmos-port-assist.py samples/boot.log --safe --timeline --json --project /tmp/pmos_test
+Compare:
+Copy code
+Bash
+python3 pmos-port-assist.py samples/new.log --safe --compare samples/old.log --project /tmp/pmos_test
+Pulse (stdin):
+Copy code
+Bash
+cat samples/boot.log | python3 pmos-port-assist.py - --pulse
+Pulse (file tail):
+Copy code
+Bash
+python3 pmos-port-assist.py samples/boot.log --pulse
+Watchdog checks
+Dry-ish run on a connected device:
+Copy code
+Bash
+PROJECT=/tmp/wd_test MAX_REBOOTS=2 TIMEOUT_MIN=1 ./pmos-watchdog.sh
+Pulse integration:
+Copy code
+Bash
+PROJECT=/tmp/wd_test MAX_REBOOTS=2 TIMEOUT_MIN=1 PULSE=1 ./pmos-watchdog.sh
+Submitting a PR
+Include:
+What problem it solves (1–3 sentences)
+Why it’s safe (backward compatible, defaults unchanged)
+How you tested (commands + result summary)
+If redaction behavior changes: list what new patterns are covered
+Style notes
+Python
+Prefer small pure helpers; avoid big rewrites.
+No heavy external libraries.
+Keep types and dataclasses simple.
+Bash
+Quote variables.
+Avoid parsing human text when structured outputs exis

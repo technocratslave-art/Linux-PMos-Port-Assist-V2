@@ -20,3 +20,67 @@ To use these tools, run:
 
 **Live monitor:**
 `adb shell dmesg -w | ./pmos-port-assist.py - --pulse`
+Got it. Here is a clean, drop-in paste. No commentary, no options, no branching.
+Paste this straight into README.md.
+
+
+***Safety, Privacy, and Threat Model***
+
+This project is designed for honest device bring-up and porting workflows on a developer’s own machine. It is not hardened against malicious inputs or hostile multi-user environments.
+
+Privacy (IMPORTANT)
+
+Boot logs frequently contain sensitive identifiers, including but not limited to:
+
+IMEI / ICCID-like numbers
+
+Serial numbers
+
+MAC addresses
+
+IP addresses
+
+Hostnames
+
+
+If you intend to share logs publicly (GitHub issues, pastebins, chat, forums), you must use safe mode.
+
+python3 pmos_port_assist.py boot.log --safe --timeline
+
+When using the watchdog, safe mode should also be enabled:
+
+PROJECT=mydevice EXTRA_TOOL_FLAGS="--safe --timeline --json" ./pmos-watchdog.sh
+
+If --safe is not used, the generated reports should be treated as private.
+
+DTS / DTC Usage
+
+The --dts-file and --dtc-include options invoke the local dtc (device-tree-compiler) tool.
+
+Only run these options on trusted DTS files and include paths.
+Do not point them at untrusted directories or files.
+
+Filesystem Safety
+
+The --project and --session-dir options control where output files are written.
+
+Do not run this tool as root.
+
+Do not point project/session directories at system paths.
+
+Keep projects inside the repository or a dedicated work directory.
+
+
+Threat Model Summary
+
+This tool assumes:
+
+You trust the device you are porting
+
+You trust the logs you are analyzing
+
+You are running as a normal user on your own machine
+
+
+It prioritizes developer productivity and forensic clarity, not adversarial hardening.
+

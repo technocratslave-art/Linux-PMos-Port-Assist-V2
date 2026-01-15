@@ -1,26 +1,13 @@
 #!/usr/bin/env bash
 # pmos-watchdog.sh
-# v2.1 — “wow, this is actually perfect” monolithic watchdog
+# v2.1.1 — monolithic watchdog (capture → analyze → compare → score → stuck detect → stop)
 #
-# If I had to sign one, it’s this one.
-# It’s hard to kill, hard to lie to, and easy to read the morning after.
-#
-# What it does:
-#   loop:
-#     (optional) flash/reboot hook
-#     wait for adb
-#     capture (pstore/last_kmsg/dmesg/logcat + /proc + partitions)
-#     compose a single boot.log
-#     run analyzer (project+history) and compare to previous run
-#     compute signature+score from analyzer JSON
-#     detect “stuck at same wall” reliably (signature + diff hash + score plateau)
-#     stop cleanly with a loud bell and pointers to the exact files
+# One file. One behavior. No “mystery v2” drifting off-repo.
 #
 # Requirements:
 #   bash, coreutils, timeout, sha256sum, awk, grep
-#   adb in PATH
-#   python3 in PATH
-#   pmos-port-assist.py (v1.3.2e recommended; redaction default ON)
+#   adb, python3
+#   ./pmos-port-assist.py (v1.3.2e recommended; redaction default ON)
 #
 # Usage:
 #   ./pmos-watchdog.sh
@@ -28,9 +15,9 @@
 #   PULSE=1 ./pmos-watchdog.sh
 #   FLASH_HOOK="fastboot reboot" ./pmos-watchdog.sh
 #
-# Safety:
-#   Analyzer should be safe-by-default (redaction ON). This watchdog assumes that.
-#   If you *must* disable redaction for local-only debugging:
+# Redaction:
+#   Analyzer is assumed safe-by-default (v1.3.2e). This watchdog does not force --safe.
+#   If you *must* disable redaction (local-only), do:
 #     SAFE_FLAGS="--json --no-redact" ./pmos-watchdog.sh
 
 set -euo pipefail
@@ -55,12 +42,12 @@ ADB_RECONNECT="${ADB_RECONNECT:-1}"
 # Capture toggles
 EXTRA_CAPTURE="${EXTRA_CAPTURE:-1}"
 CAPTURE_DMESG="${CAPTURE_DMESG:-1}"
-CAPTURE_LOGCAT="${CAPTURE_LOGCAT:-1}"     # if you get hangs, set CAPTURE_LOGCAT=0
+CAPTURE_LOGCAT="${CAPTURE_LOGCAT:-1}"     # if some devices hang here, set CAPTURE_LOGCAT=0
 CAPTURE_PSTORE="${CAPTURE_PSTORE:-1}"
 CAPTURE_LAST_KMSG="${CAPTURE_LAST_KMSG:-1}"
 
 # Analyzer flags
-SAFE_FLAGS="${SAFE_FLAGS:---json}"         # analyzer redaction assumed default ON
+SAFE_FLAGS="${SAFE_FLAGS:---json}"        # analyzer safe-by-default expected
 EXTRA_TOOL_FLAGS="${EXTRA_TOOL_FLAGS:---timeline}"
 
 # Optional live pulse
@@ -68,8 +55,9 @@ PULSE="${PULSE:-0}"
 PULSE_MODE="${PULSE_MODE:-adb}"           # adb|file
 PULSE_AUTOSTOP="${PULSE_AUTOSTOP:-1}"
 
-# Stop conditions / scoring
+# Stuck detection sensitivity
 STUCK_N="${STUCK_N:-3}"
+PLATEAU_TS_EPS="${PLATEAU_TS_EPS:-0.20}"  # seconds: score plateau only counts if timestamp doesn't improve
 
 # Optional early exit gates (off by default)
 EARLY_STOP_ON_PANIC="${EARLY_STOP_ON_PANIC:-0}"
@@ -111,8 +99,9 @@ hash_file() {
 }
 
 ensure_deps() {
-  have_cmd adb || die "adb not found in PATH"
-  have_cmd python3 || die "python3 not found in PATH"
+  for c in adb python3 timeout sha256sum awk grep; do
+    have_cmd "$c" || die "$c not found in PATH"
+  done
   [[ -f "$TOOL" ]] || die "Analyzer not found: TOOL=$TOOL"
 }
 
@@ -186,6 +175,8 @@ capture_state() {
       echo "FAIL: dmesg" >>"$caplog"
       : >"$out_dir/dmesg.txt"
     fi
+  else
+    : >"$out_dir/dmesg.txt"
   fi
 
   if [[ "$CAPTURE_LOGCAT" == "1" ]]; then
@@ -303,12 +294,27 @@ sig_from_json() {
 
   python3 - "$json_path" <<'PY'
 import json, sys
-d = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+try:
+  d = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+  print("nosig"); raise SystemExit(0)
+
 c = d.get("counts", {}) or {}
 ts = d.get("last_timestamp", None)
-def g(k): return int(c.get(k, 0) or 0)
+
+def g(k): 
+  try: return int(c.get(k, 0) or 0)
+  except Exception: return 0
+
+# last_timestamp is rounded to 2dp so tiny jitter doesn't thrash the signature
+t = -1.0
+try:
+  if ts is not None: t = float(ts)
+except Exception:
+  t = -1.0
+
 parts = [
-  f"{(ts if ts is not None else -1):.2f}",
+  f"{t:.2f}",
   str(g("panic_oops")),
   str(g("init_fail")),
   str(g("vfs_root")),
@@ -322,6 +328,23 @@ print("|".join(parts))
 PY
 }
 
+ts_from_json() {
+  local json_path="$1"
+  [[ -s "$json_path" ]] || { echo "-1"; return 0; }
+
+  python3 - "$json_path" <<'PY'
+import json, sys
+try:
+  d = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+  ts = d.get("last_timestamp", None)
+  if ts is None:
+    print("-1"); raise SystemExit(0)
+  print(f"{float(ts):.4f}")
+except Exception:
+  print("-1")
+PY
+}
+
 score_from_json() {
   local json_path="$1"
   [[ -s "$json_path" ]] || { echo "0"; return 0; }
@@ -332,9 +355,16 @@ import json, sys
 p = sys.argv[1]
 W = list(map(int, sys.argv[2:]))
 W_PANIC,W_INIT,W_VFS,W_DT,W_CMA,W_MOD,W_FW,W_PROBE = W
-d = json.load(open(p, "r", encoding="utf-8"))
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  print(0); raise SystemExit(0)
+
 c = d.get("counts", {}) or {}
-def g(k): return int(c.get(k, 0) or 0)
+def g(k):
+  try: return int(c.get(k, 0) or 0)
+  except Exception: return 0
+
 score = (
   g("panic_oops") * W_PANIC +
   g("init_fail") * W_INIT +
@@ -359,7 +389,10 @@ p = sys.argv[1]
 stop_panic = sys.argv[2] == "1"
 stop_init  = sys.argv[3] == "1"
 stop_vfs   = sys.argv[4] == "1"
-d = json.load(open(p, "r", encoding="utf-8"))
+try:
+  d = json.load(open(p, "r", encoding="utf-8"))
+except Exception:
+  sys.exit(1)
 c = d.get("counts", {}) or {}
 panic = int(c.get("panic_oops", 0) or 0)
 initf = int(c.get("init_fail", 0) or 0)
@@ -435,6 +468,7 @@ mkdir -p "$runs_dir"
 sig_file="$base_dir/.last_sig"
 diff_hash_file="$base_dir/.last_diff_hash"
 score_file="$base_dir/.last_score"
+ts_file="$base_dir/.last_ts"
 
 stable_count=0
 prev_primary=""
@@ -479,13 +513,23 @@ for ((i=1; i<=MAX_REBOOTS; i++)); do
   newest_json="$base_dir/latest.signals.json"
   newest_diff="$(ls -1t "$base_dir"/history/*.diff.md 2>/dev/null | head -n 1 || true)"
 
+  if [[ ! -s "$newest_json" ]]; then
+    log "⚠️  No latest.signals.json produced; skipping scoring/stuck logic this run."
+    prev_primary="$primary"
+    continue
+  fi
+
   sig="$(sig_from_json "$newest_json")"
   score="$(score_from_json "$newest_json")"
+  cur_ts_val="$(ts_from_json "$newest_json")"
+
   echo "$sig" >"$out_dir/signature.txt" || true
   echo "$score" >"$out_dir/score.txt" || true
+  echo "$cur_ts_val" >"$out_dir/last_timestamp.txt" || true
 
   last_sig="$(cat "$sig_file" 2>/dev/null || true)"
   last_score="$(cat "$score_file" 2>/dev/null || true)"
+  last_ts_val="$(cat "$ts_file" 2>/dev/null || echo "-1")"
 
   cur_diff_hash=""
   last_diff_hash="$(cat "$diff_hash_file" 2>/dev/null || true)"
@@ -509,21 +553,29 @@ for ((i=1; i<=MAX_REBOOTS; i++)); do
     reason="diff hash match"
   fi
 
-  # 3) Score plateau (no improvement) as last resort
-  if [[ "$is_stable" -eq 0 && -n "$last_score" && "$score" == "$last_score" ]]; then
-    is_stable=1
-    reason="score plateau"
+  # 3) Score plateau only counts if timestamp did NOT improve (prevents false “stuck” when progress happens at same score)
+  if [[ "$is_stable" -eq 0 && -n "$last_score" && "$score" == "$last_score" && "$cur_ts_val" != "-1" && "$last_ts_val" != "-1" ]]; then
+    python3 - "$cur_ts_val" "$last_ts_val" "$PLATEAU_TS_EPS" <<'PY' >/dev/null 2>&1 && {
+import sys
+cur = float(sys.argv[1]); last = float(sys.argv[2]); eps = float(sys.argv[3])
+# plateau only if not improved (<= last + eps)
+sys.exit(0 if cur <= last + eps else 1)
+PY
+      is_stable=1
+      reason="score plateau (no ts gain)"
+    }
   fi
 
   if [[ "$is_stable" -eq 1 ]]; then
     stable_count=$((stable_count + 1))
-    log "Stable wall: $reason ($stable_count/$STUCK_N)  score=$score  sig=$sig"
+    log "Stable wall: $reason ($stable_count/$STUCK_N)  score=$score  ts=${cur_ts_val}s  sig=$sig"
   else
     stable_count=0
     echo "$sig" >"$sig_file"
     echo "$score" >"$score_file"
+    echo "$cur_ts_val" >"$ts_file"
     [[ -n "$cur_diff_hash" ]] && echo "$cur_diff_hash" >"$diff_hash_file"
-    log "Change detected. score=$score  sig=$sig"
+    log "Change detected. score=$score  ts=${cur_ts_val}s  sig=$sig"
   fi
 
   if should_early_stop "$newest_json"; then

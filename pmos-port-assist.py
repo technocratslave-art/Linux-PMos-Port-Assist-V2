@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pmos-port-assist.py
-# v1.3.2d — forensic analyzer + semantic diff + timeline + pulse heartbeat (stdin/file tail)
+# v1.3.2e — forensic analyzer + semantic diff + timeline + pulse heartbeat (stdin/file tail)
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-VERSION = "1.3.2d"
+VERSION = "1.3.2e"
 
 # -------------------------
 # Patterns / Knowledge Base
@@ -385,7 +385,16 @@ def extract_signals(lines: List[str], tail: int = 200, no_tail: bool = False) ->
                 m = re.search(r"(-\d+)\b", line)
                 if m:
                     errno = m.group(1)
-                signals[kind].append(Signal(kind=kind, line_no=idx, line=line, ts=ts, errno=errno, errno_hint=errno_hint))
+                signals[kind].append(
+                    Signal(
+                        kind=kind,
+                        line_no=idx,
+                        line=line,
+                        ts=ts,
+                        errno=errno,
+                        errno_hint=errno_hint,
+                    )
+                )
 
     # Tail blocks: keep last N lines for context unless disabled
     note = ""
@@ -478,6 +487,10 @@ def format_signals_md(
         summary_parts.append("INIT FAIL (no userspace init)")
     if bundle.counts.get("vfs_root", 0) > 0:
         summary_parts.append("ROOT MOUNT FAIL (check root= vs partitions)")
+    if bundle.counts.get("cma_fail", 0) > 0:
+        summary_parts.append(f"CMA FAIL ({bundle.counts['cma_fail']})")
+    if bundle.counts.get("module_fail", 0) > 0:
+        summary_parts.append(f"MODULE FAIL ({bundle.counts['module_fail']})")
     if bundle.last_timestamp is not None and bundle.last_timestamp < 8:
         summary_parts.append(f"very early death @ {bundle.last_timestamp:.1f}s")
 
@@ -486,7 +499,16 @@ def format_signals_md(
 
     # Counts
     md.append("## Counts")
-    keys = ["panic_oops", "init_fail", "vfs_root", "probe_fail", "firmware_missing", "device_tree"]
+    keys = [
+        "panic_oops",
+        "init_fail",
+        "vfs_root",
+        "probe_fail",
+        "firmware_missing",
+        "device_tree",
+        "cma_fail",
+        "module_fail",
+    ]
     for k in keys:
         md.append(f"- **{k}**: {bundle.counts.get(k, 0)}")
     if bundle.last_timestamp is not None:
@@ -526,7 +548,11 @@ def format_signals_md(
         for s in sigs[:30]:
             extra = f" [{s.errno_hint}]" if s.errno_hint else ""
             md.append(f"- L{s.line_no}: {s.line}{extra}")
-            ctx = _context_block(lines, s.line_no, radius=6 if k in ("panic_oops", "vfs_root") else 4)
+            ctx = _context_block(
+                lines,
+                s.line_no,
+                radius=6 if k in ("panic_oops", "vfs_root") else 4,
+            )
             md.append("```")
             md.extend(ctx)
             md.append("```")
@@ -685,10 +711,12 @@ def run_pulse(path_str: str, interval: float = 1.0, stop_on_panic: bool = False)
     p_count = 0
     i_count = 0
     v_count = 0
+    c_count = 0
+    m_count = 0
     seen_panic = False
 
     def consume_line(line: str) -> None:
-        nonlocal last_ts, p_count, i_count, v_count, seen_panic
+        nonlocal last_ts, p_count, i_count, v_count, c_count, m_count, seen_panic
         t = extract_boot_timestamp(line)
         if t is not None:
             last_ts = t
@@ -698,10 +726,16 @@ def run_pulse(path_str: str, interval: float = 1.0, stop_on_panic: bool = False)
             i_count += 1
         if PATTERNS["vfs_root"].search(line):
             v_count += 1
+        if PATTERNS["cma_fail"].search(line):
+            c_count += 1
+        if PATTERNS["module_fail"].search(line):
+            m_count += 1
 
         if stop_on_panic and (p_count > 0) and not seen_panic:
             seen_panic = True
-            sys.stdout.write(f"\r\033[K💓 [{last_ts:>7.2f}s] P:{p_count} I:{i_count} V:{v_count}")
+            sys.stdout.write(
+                f"\r\033[K💓 [{last_ts:>7.2f}s] P:{p_count} I:{i_count} V:{v_count} C:{c_count} M:{m_count}"
+            )
             sys.stdout.flush()
             print("\n\n🚨 PANIC DETECTED — stopping pulse.")
             raise SystemExit(3)
@@ -711,7 +745,9 @@ def run_pulse(path_str: str, interval: float = 1.0, stop_on_panic: bool = False)
         now = time.time()
         if force or (now - last_print) >= interval:
             last_print = now
-            sys.stdout.write(f"\r\033[K💓 [{last_ts:>7.2f}s] P:{p_count} I:{i_count} V:{v_count}")
+            sys.stdout.write(
+                f"\r\033[K💓 [{last_ts:>7.2f}s] P:{p_count} I:{i_count} V:{v_count} C:{c_count} M:{m_count}"
+            )
             sys.stdout.flush()
 
     try:
@@ -759,7 +795,22 @@ def main() -> int:
     ap.add_argument("--compare", default=None, help="Compare against previous log file (semantic diff)")
     ap.add_argument("--project", default=None, help="Project name (enables latest.* + history output)")
     ap.add_argument("--session-dir", default=None, help="Base directory for projects (default: cwd)")
-    ap.add_argument("--safe", action="store_true", help="Enable aggressive redaction (recommended)")
+
+    # Redaction: default ON (safe by default); opt out with --no-redact
+    ap.add_argument(
+        "--safe",
+        dest="safe",
+        action="store_true",
+        default=True,
+        help="Redact sensitive data (default: ON)",
+    )
+    ap.add_argument(
+        "--no-redact",
+        dest="safe",
+        action="store_false",
+        help="Disable redaction (NOT recommended for sharing logs)",
+    )
+
     ap.add_argument("--timeline", action="store_true", help="Include timeline sparkline (requires timestamps)")
     ap.add_argument("--last-only", action="store_true", help="Only analyze last chunk of the log (faster)")
     ap.add_argument("--tail", type=int, default=200, help="Tail size for context (default 200)")
@@ -805,9 +856,8 @@ def main() -> int:
         lines = raw.splitlines(True)
         orig = str(log_path)
 
-    # Safe mode redaction
-    if args.safe:
-        lines = [redact_text(ln, aggressive=True) for ln in lines]
+    # Redaction (default ON; can disable with --no-redact)
+    lines = [redact_text(ln, aggressive=args.safe) for ln in lines]
 
     # Optional last-only speedup
     if args.last_only and len(lines) > 5000:
@@ -837,8 +887,10 @@ def main() -> int:
             return 0
         prev_raw = prev_path.read_text(errors="ignore")
         prev_lines = prev_raw.splitlines(True)
-        if args.safe:
-            prev_lines = [redact_text(ln, aggressive=True) for ln in prev_lines]
+
+        # Redaction behavior matches main log (default ON; can disable with --no-redact)
+        prev_lines = [redact_text(ln, aggressive=args.safe) for ln in prev_lines]
+
         if args.last_only and len(prev_lines) > 5000:
             prev_lines = prev_lines[-5000:]
 

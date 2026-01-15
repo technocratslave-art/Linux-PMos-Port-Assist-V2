@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pmos_port_assist.py
+# pmos-port-assist.py
 # v1.3.2d — forensic analyzer + semantic diff + timeline + pulse heartbeat (stdin/file tail)
 
 from __future__ import annotations

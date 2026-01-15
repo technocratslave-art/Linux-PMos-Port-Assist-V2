@@ -22,15 +22,12 @@ To use these tools, run:
 `chmod +x *.sh *.py`
 
 **Live monitor:**
-`adb shell dmesg -w | ./pmos-port-assist.py - --pulse`
-Got it. Here is a clean, drop-in paste. No commentary, no options, no branching.
-Paste this straight into README.md.
+`adb shell dmesg -w | ./pmos-port-assist.py - --pulse 
 
 
 ***Safety, Privacy, and Threat Model***
 
-This project is designed for honest device bring-up and porting workflows on a developer’s own machine. It is not hardened against malicious inputs or hostile multi-user environments.
-
+This project is designed for honest device bring-up and porting workflows on a developer’s own machine. It is not hardened against malicious inputs or hostile multi-user environment
 Privacy (IMPORTANT)
 
 Boot logs frequently contain sensitive identifiers, including but not limited to:

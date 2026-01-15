@@ -6,6 +6,9 @@ A bring-up toolkit for postmarketOS device porting:
 - Timeline sparkline (requires kernel timestamps)
 - Live Pulse heartbeat (real-time “one-line status”)
 
+​⚠️ IMPORTANT: Always use the --safe flag when sharing logs publicly to redact your IMEI, IP, and unique device IDs.
+    - More details below
+    
 ## Requirements
 
 - Python 3.9+

@@ -1,0 +1,19 @@
+NO WARRANTY. NO SECURITY HARDENING. NO LIABILITY.
+
+This tool is provided as-is for honest device bring-up and debugging by the person running it.
+
+It is NOT designed for:
+- hostile or multi-user environments
+- untrusted or malicious log inputs
+- automated CI, sandboxing, or adversarial use
+- running as root or against system paths
+
+Assumptions:
+- You trust the device you are porting
+- You trust the logs you are analyzing
+- You are running as a normal user on your own machine
+
+If you share output publicly, you MUST use --safe.
+If you do not use --safe, treat all outputs as private.
+
+Use at your own risk.

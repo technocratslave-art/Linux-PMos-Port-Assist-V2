@@ -23,13 +23,120 @@ VERSION = "1.3.2d"
 # Patterns / Knowledge Base
 # -------------------------
 
+# Reusable log prefix: optional <level> and/or [timestamp], anchored
+_LOG_PREFIX = r"""
+^ \s*
+(?: <\d+> \s* )?
+(?: \[ [^\]]+ \] \s* )?
+"""
+
 PATTERNS: Dict[str, re.Pattern] = {
-    "panic_oops": re.compile(r"\b(?:Kernel panic\b|Oops:\b|BUG:\b|Unable to handle kernel NULL pointer dereference)\b", re.I),
-    "init_fail": re.compile(r"\b(?:No init found\b|Failed to execute .*?/init\b|init not found\b|run-init\b.*failed)\b", re.I),
-    "vfs_root": re.compile(r"\b(?:VFS:\s*Cannot open root device|cannot mount root|mounting .* on /sysroot failed|rootfs not found)\b", re.I),
-    "probe_fail": re.compile(r"\b(?:probe\b.*(?:failed|error|returned|timed out)|failed to probe)\b", re.I),
-    "firmware_missing": re.compile(r"\b(?:firmware:\s*failed to load|Direct firmware load for .* failed|request_firmware.*failed|no suitable firmware)\b", re.I),
-    "device_tree": re.compile(r"\b(?:OF:\s*|device tree|dtb|FDT:\s*|Unable to parse device tree|machine model.*not found|setup_machine.*dt.*not found)\b", re.I),
+    "panic_oops": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            Kernel\ panic\ -\ not\ syncing\b [^\n]* |
+            BUG:\s+ [^\n]* |
+            Oops:\s+ [^\n]* |
+            Unable\ to\ handle\ kernel\ (?:NULL\ pointer\ dereference|paging\ request)\b [^\n]* |
+            Internal\ error:\s+ [^\n]* |
+            panic:\s+ [^\n]*
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "init_fail": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            No\ working\ init\ found\b |
+            No\ init\ found\b |
+            Run\ /sbin/init\ as\ init\ process\b [^\n]* |
+            Failed\ to\ execute\ (?:/init|/sbin/init|/bin/init)\b |
+            Requested\ init\b [^\n]* \bfailed\b |
+            init:\s+ [^\n]* \bfailed\b
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "vfs_root": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            VFS:\s+Cannot\ open\ root\ device\b [^\n]* |
+            VFS:\s+Unable\ to\ mount\ root\ fs\b [^\n]* |
+            Kernel\ panic\ -\ not\ syncing:\s+VFS:\s+Unable\ to\ mount\ root\ fs\b [^\n]* |
+            mount:\s+mounting\s+\S+\s+on\s+/sysroot\s+failed\b [^\n]*
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "probe_fail": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            probe\ of\ \S+\s+failed\b
+                (?:\s+\S+){0,10}
+                \b(?:error|err|errno|status|returned)\b
+                (?:\s+\S+){0,6}
+                \s-\d+\b
+            |
+            \bprobe\b
+                (?:\s+\S+){0,16}
+                \bfailed\b
+                (?:\s+\S+){0,10}
+                \b(?:error|err|errno|status|returned)\b
+                (?:\s+\S+){0,6}
+                \s-\d+\b
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "firmware_missing": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            firmware:\s+failed\ to\ load\s+\S+\b [^\n]* |
+            Direct\ firmware\ load\ for\s+\S+\b [^\n]* \bfailed\b |
+            request_firmware(?:_nowait)?:\s+ [^\n]* \bfailed\b
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "device_tree": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            OF:\s+fdt:\s+ [^\n]* \bMachine\ model\b [^\n]* \bnot\ found\b |
+            OF:\s+ [^\n]* \bMachine\ model\b [^\n]* \bnot\ found\b |
+            setup_machine\b [^\n]* \bdt\b [^\n]* \bnot\ found\b |
+            Unable\ to\ parse\ device\ tree\b [^\n]*
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "cma_fail": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            CMA:\s+ [^\n]* \ballocation\ failed\b [^\n]* |
+            cma:\s+ [^\n]* \ballocation\ failed\b [^\n]* |
+            dma_alloc_coherent\s+failed\b [^\n]* |
+            dma_alloc_attrs\s+failed\b [^\n]*
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
+
+    "module_fail": re.compile(
+        _LOG_PREFIX + r"""
+        (?:
+            modprobe:\s+(?:FATAL:\s+)?[Mm]odule\s+\S+\s+not\ found\b [^\n]* |
+            insmod:\s+can'?t\ insert\s+\S+:\s+ [^\n]* |
+            failed\ to\ load\ module\s+\S+\b [^\n]*
+        )
+        """,
+        re.VERBOSE | re.IGNORECASE | re.MULTILINE,
+    ),
 }
 
 KNOWN_ISSUES: List[Dict[str, str]] = [

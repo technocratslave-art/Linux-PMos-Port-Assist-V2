@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pmos_watchdog.sh
+# pmos-watchdog.sh
 # v1.3.2d companion watchdog: capture → analyze → compare → stuck detect → early stop
 
 set -euo pipefail
